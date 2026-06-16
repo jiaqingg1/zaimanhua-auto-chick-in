@@ -2,7 +2,7 @@ import os
 import time
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
-from utils import extract_user_info_from_cookies, claim_task_reward, get_task_list, extract_tasks_from_response
+from utils import extract_user_info_from_cookies, claim_task_reward, get_task_list, extract_tasks_from_response, init_localstorage
 
 # 配置
 MAX_RETRIES = 5
@@ -161,68 +161,189 @@ def checkin_once(cookie_str):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # 使用真实浏览器 User-Agent
         context = browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
-
-        # 添加 Cookie
         context.add_cookies(cookies)
 
         page = context.new_page()
         page.set_default_timeout(PAGE_TIMEOUT)
 
         try:
-            # 访问页面，增加超时时间
-            page.goto('https://i.zaimanhua.com/', timeout=PAGE_TIMEOUT)
-
-            # 等待页面加载
-            page.wait_for_load_state('networkidle', timeout=PAGE_TIMEOUT)
+            # 先访问首页设置localStorage（关键：避免直接跳转到登录页）
+            print("访问首页设置localStorage...")
+            page.goto('https://www.zaimanhua.com/', wait_until='domcontentloaded', timeout=30000)
+            page.wait_for_timeout(3000)
+            
+            # 设置localStorage确保Vue应用识别登录状态
+            print("设置localStorage...")
+            try:
+                init_localstorage(page, cookie_str)
+            except Exception as e:
+                print(f"设置localStorage失败: {e}")
+            
+            # 等待localStorage生效
+            page.wait_for_timeout(1000)
+            
+            # 访问用户中心进行签到
+            print("访问用户中心...")
+            page.goto('https://i.zaimanhua.com/', timeout=PAGE_TIMEOUT, wait_until='domcontentloaded')
+            
+            # 等待页面稳定（多重等待策略）
+            print("等待页面加载...")
+            try:
+                page.wait_for_load_state('networkidle', timeout=30000)
+            except:
+                print("networkidle超时，尝试domcontentloaded")
+                page.wait_for_load_state('domcontentloaded', timeout=10000)
+            
+            # 额外等待确保Vue应用渲染完成
+            print("等待Vue应用渲染...")
+            page.wait_for_timeout(3000)
+            
             print(f"页面标题: {page.title()}")
 
-            # 等待签到按钮出现
-            page.wait_for_selector('.ant-btn-primary', timeout=10000)
+            # 多次尝试等待按钮加载
+            print("等待按钮加载...")
+            button_found = False
+            for attempt in range(3):
+                try:
+                    page.wait_for_selector('button.ant-btn-primary', timeout=10000)
+                    button_found = True
+                    print(f"按钮已加载（第{attempt+1}次尝试）")
+                    break
+                except:
+                    print(f"第{attempt+1}次等待按钮超时，继续尝试...")
+                    if attempt < 2:
+                        page.wait_for_timeout(2000)
+            
+            if not button_found:
+                print("按钮加载等待失败，继续尝试查找...")
 
-            # 获取按钮信息
-            button = page.locator('.ant-btn-primary').first
-            button_text = button.inner_text()
-            is_disabled = button.is_disabled()
+            # 查找所有 .ant-btn-primary 按钮
+            print("查找签到按钮...")
+            
+            # 尝试多种选择器策略
+            selectors_to_try = [
+                'button.ant-btn-primary',
+                'button.ant-btn',
+                '.ant-btn-primary',
+                'button'
+            ]
+            
+            buttons_locator = None
+            buttons_count = 0
+            
+            for selector in selectors_to_try:
+                try:
+                    locator = page.locator(selector)
+                    count = locator.count()
+                    if count > 0:
+                        buttons_locator = locator
+                        buttons_count = count
+                        print(f"使用选择器 '{selector}' 找到 {buttons_count} 个按钮")
+                        break
+                except Exception as e:
+                    print(f"选择器 '{selector}' 失败: {e}")
+            
+            if buttons_count == 0:
+                print("[ERROR] 未找到任何按钮")
+                page.screenshot(path="error_no_buttons_at_all.png")
+                return False
 
-            print(f"按钮文字: {button_text}")
+            checkin_button = None
+            button_text = None
+            
+            # 遍历所有按钮，查找包含签到文字的
+            for i in range(buttons_count):
+                if not buttons_locator:
+                    continue
+                try:
+                    btn = buttons_locator.nth(i)
+                    text = btn.inner_text()
+                    print(f"  按钮 {i}: 文字='{text}'")
+                    
+                    if '立即签到' in text or '签到' in text or '已签到' in text:
+                        checkin_button = btn
+                        button_text = text
+                        print(f"匹配到签到按钮: '{text}'")
+                        break
+                except Exception as e:
+                    print(f"  按钮 {i}: 获取文字失败 - {e}")
+
+            if not checkin_button:
+                print("[ERROR] 未找到签到按钮")
+                page.screenshot(path="error_no_button.png")
+                return False
+
+            if not button_text:
+                print("[ERROR] 无法获取按钮文字")
+                page.screenshot(path="error_no_text.png")
+                return False
+
+            is_disabled = checkin_button.is_disabled()
             print(f"按钮禁用状态: {is_disabled}")
 
-            if is_disabled:
-                # 检查是否已签到（按钮禁用可能意味着已签到）
-                if "已签到" in button_text or "已领取" in button_text:
-                    print("今天已经签到过了！")
-                    result = True
-                else:
-                    # 可能是未登录状态，尝试用 JavaScript 强制点击
-                    print("按钮被禁用，尝试使用 JavaScript 点击...")
-                    page.evaluate("document.querySelector('.ant-btn-primary').click()")
-                    page.wait_for_timeout(2000)
-                    print("JavaScript 点击完成")
-                    result = True
-            else:
-                # 按钮可用，正常点击
-                button.click()
-                page.wait_for_timeout(2000)
-                print("签到成功！")
-                result = True
+            # 如果找到的是"已签到"按钮，直接返回成功
+            if "已签到" in button_text:
+                print("今天已经签到过了！")
+                return True
+
+            # 点击签到按钮
+            print("点击签到按钮...")
+            checkin_button.click()
+
+            # 等待1秒后刷新页面验证
+            print("等待 1 秒后刷新页面验证...")
+            page.wait_for_timeout(1000)
+            page.reload(wait_until='domcontentloaded')
+            
+            # 等待页面稳定
+            try:
+                page.wait_for_load_state('networkidle', timeout=30000)
+            except:
+                page.wait_for_load_state('domcontentloaded', timeout=10000)
+            
+            page.wait_for_timeout(2000)
+
+            # 验证是否签到成功（查找"已签到"按钮）
+            print("验证签到状态...")
+            try:
+                # 多种选择器尝试
+                for selector in ['button:has-text("已签到")', 'button.ant-btn-primary', '.ant-btn']:
+                    try:
+                        signed_locator = page.locator(selector)
+                        if signed_locator.count() > 0:
+                            for i in range(signed_locator.count()):
+                                btn = signed_locator.nth(i)
+                                text = btn.inner_text()
+                                if "已签到" in text:
+                                    button_text = text
+                                    is_disabled = btn.is_disabled()
+                                    print(f"刷新后按钮文字: {button_text}")
+                                    print(f"刷新后按钮禁用状态: {is_disabled}")
+                                    print("✓ 签到成功！按钮已变为'已签到'")
+                                    return True
+                    except:
+                        continue
+            except Exception as e:
+                print(f"验证签到状态时出错: {e}")
+
+            # 如果没有找到"已签到"，可能签到失败
+            print("[WARN] 未确认到签到成功状态，截图保存...")
+            page.screenshot(path="error_verify_failed.png")
+            return False
 
         except Exception as e:
             print(f"签到失败: {e}")
-            # 保存截图用于调试
             try:
                 page.screenshot(path="error_screenshot.png")
                 print("已保存错误截图: error_screenshot.png")
             except:
                 pass
-            result = False
+            return False
         finally:
             browser.close()
-
-        return result
 
 
 def checkin(cookie_str):
