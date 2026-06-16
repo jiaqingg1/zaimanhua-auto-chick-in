@@ -165,29 +165,47 @@ def checkin_once(cookie_str):
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
         context.add_cookies(cookies)
+        
+        # 关键：在页面加载前注入localStorage
+        user_info = extract_user_info_from_cookies(cookie_str)
+        if user_info and user_info.get('uid'):
+            # 构建lginfo对象
+            lginfo = {
+                "uid": int(user_info.get('uid', 0)),
+                "username": user_info.get('username', user_info.get('nickname', '')),
+                "nickname": user_info.get('nickname', user_info.get('username', '')),
+                "email": user_info.get('email', ''),
+                "photo": user_info.get('photo', ''),
+                "bind_phone": user_info.get('bind_phone', ''),
+                "sex": int(user_info.get('sex', 0)),
+                "token": user_info.get('token', ''),
+                "setPasswd": 1,
+                "bindWechat": user_info.get('bindWechat', False),
+                "bindQq": user_info.get('bindQq', False),
+                "bindSina": user_info.get('bindSina', False),
+                "status": user_info.get('status', 1),
+                "is_sign": user_info.get('is_sign', True),
+                "user_level": user_info.get('user_level', 1),
+                "isInUserWhitelist": user_info.get('isInUserWhitelist', False)
+            }
+            
+            import json
+            # lginfo 是 Python dict，需要转成 JavaScript 对象
+            init_script = f'''
+            localStorage.setItem('lginfo', JSON.stringify({json.dumps(lginfo)}));
+            '''
+            context.add_init_script(init_script)
+            print(f"已注入localStorage脚本 (uid: {lginfo.get('uid')})")
 
         page = context.new_page()
         page.set_default_timeout(PAGE_TIMEOUT)
 
         try:
-            # 先访问首页设置localStorage（关键：避免直接跳转到登录页）
-            print("访问首页设置localStorage...")
-            page.goto('https://www.zaimanhua.com/', wait_until='domcontentloaded', timeout=30000)
-            page.wait_for_timeout(3000)
-            
-            # 设置localStorage确保Vue应用识别登录状态
-            print("设置localStorage...")
-            try:
-                init_localstorage(page, cookie_str)
-            except Exception as e:
-                print(f"设置localStorage失败: {e}")
-            
-            # 等待localStorage生效
-            page.wait_for_timeout(1000)
-            
-            # 访问用户中心进行签到
             print("访问用户中心...")
             page.goto('https://i.zaimanhua.com/', timeout=PAGE_TIMEOUT, wait_until='domcontentloaded')
+            page.wait_for_timeout(2000)
+            
+            print(f"初始页面标题: {page.title()}")
             
             # 等待页面稳定（多重等待策略）
             print("等待页面加载...")
