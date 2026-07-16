@@ -2,7 +2,7 @@
 import os
 import json
 import requests
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from dotenv import load_dotenv
 
 
@@ -132,6 +132,60 @@ def validate_cookie(cookie_str):
     return True, None
 
 
+def normalize_cookie(cookie_str):
+    """清洗原始 Cookie 字符串：去重、同步 token 一致性。
+
+    直接接收 document.cookie 的完整输出。token 字段是认证令牌的权威来源；
+    清洗后会将 addinfo / lginfo 内嵌的 token 同步为 token 字段的值，
+    并对同名字段去重（保留最后一个出现的值，符合浏览器实际行为）。
+    """
+    if not cookie_str:
+        return cookie_str
+
+    fields = {}
+    order = []
+    for item in cookie_str.split(';'):
+        item = item.strip()
+        if '=' in item:
+            name, value = item.split('=', 1)
+            name = name.strip()
+            if not name:
+                continue
+            if name not in fields:
+                order.append(name)
+            fields[name] = value.strip()
+
+    # 以 token 字段为准，同步 addinfo / lginfo 内嵌 token
+    canonical_token = fields.get('token')
+    if not canonical_token:
+        info = extract_user_info_from_cookies(cookie_str)
+        canonical_token = info.get('token') if isinstance(info, dict) else None
+
+    if canonical_token:
+        fields['token'] = canonical_token
+        if 'token' not in order:
+            order.append('token')
+        if 'addinfo' in fields:
+            parts = fields['addinfo'].split('|')
+            # addinfo 格式: uid|username|phone|token|...
+            if len(parts) >= 4 and parts[3] != canonical_token:
+                parts[3] = canonical_token
+                fields['addinfo'] = '|'.join(parts)
+        if 'lginfo' in fields:
+            try:
+                obj = json.loads(unquote(fields['lginfo']))
+                if isinstance(obj, dict) and obj.get('token') != canonical_token:
+                    obj['token'] = canonical_token
+                    fields['lginfo'] = quote(
+                        json.dumps(obj, ensure_ascii=False, separators=(',', ':')),
+                        safe='{}:',
+                    )
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    return '; '.join(f"{n}={fields[n]}" for n in order)
+
+
 def get_all_cookies():
     """获取所有账号的 Cookie"""
     load_dotenv()  # 自动加载 .env 文件（本地测试用）
@@ -139,14 +193,16 @@ def get_all_cookies():
     cookies_list = []
     single = os.environ.get('ZAIMANHUA_COOKIE')
     if single:
-        label = _make_account_label('默认账号', single)
-        cookies_list.append((label, single))
+        normalized = normalize_cookie(single)
+        label = _make_account_label('默认账号', normalized)
+        cookies_list.append((label, normalized))
     i = 1
     while True:
         cookie = os.environ.get(f'ZAIMANHUA_COOKIE_{i}')
         if cookie:
-            label = _make_account_label(f'账号 {i}', cookie)
-            cookies_list.append((label, cookie))
+            normalized = normalize_cookie(cookie)
+            label = _make_account_label(f'账号 {i}', normalized)
+            cookies_list.append((label, normalized))
             i += 1
         else:
             break

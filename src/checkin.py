@@ -2,7 +2,7 @@ import os
 import time
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
-from utils import extract_user_info_from_cookies, claim_task_reward, get_task_list, extract_tasks_from_response, init_localstorage
+from utils import extract_user_info_from_cookies, claim_task_reward, get_task_list, extract_tasks_from_response, init_localstorage, normalize_cookie
 
 # 配置
 MAX_RETRIES = 5
@@ -33,16 +33,18 @@ def get_all_cookies():
     # 兼容单账号配置
     single = os.environ.get('ZAIMANHUA_COOKIE')
     if single:
-        label = _make_account_label('默认账号', single)
-        cookies_list.append((label, single))
+        normalized = normalize_cookie(single)
+        label = _make_account_label('默认账号', normalized)
+        cookies_list.append((label, normalized))
 
     # 支持多账号配置 ZAIMANHUA_COOKIE_1, _2, _3...
     i = 1
     while True:
         cookie = os.environ.get(f'ZAIMANHUA_COOKIE_{i}')
         if cookie:
-            label = _make_account_label(f'账号 {i}', cookie)
-            cookies_list.append((label, cookie))
+            normalized = normalize_cookie(cookie)
+            label = _make_account_label(f'账号 {i}', normalized)
+            cookies_list.append((label, normalized))
             i += 1
         else:
             break
