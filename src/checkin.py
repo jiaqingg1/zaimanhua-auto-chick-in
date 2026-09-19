@@ -68,16 +68,15 @@ def parse_cookies(cookie_str):
     return cookies
 
 
-def claim_checkin_reward(cookie_str):
-    """领取签到任务（到此一游）的积分奖励"""
+def claim_task_by_id(cookie_str, task_id):
+    """通用：根据任务ID领取奖励"""
     user_info = extract_user_info_from_cookies(cookie_str)
     token = user_info.get('token') if isinstance(user_info, dict) else None
 
     if not token:
-        print("无法获取 token，跳过领取积分")
+        print("无法获取 token，跳过领取")
         return False
 
-    # 获取任务列表，检查签到任务状态
     task_result = get_task_list(token)
     if not task_result or task_result.get('errno') != 0:
         print("获取任务列表失败")
@@ -85,74 +84,28 @@ def claim_checkin_reward(cookie_str):
 
     tasks = extract_tasks_from_response(task_result)
     for task in tasks:
-        task_id = task.get('id') or task.get('taskId')
+        tid = task.get('id') or task.get('taskId')
         task_name = task.get('title') or task.get('name') or task.get('taskName', '未知')
         status = task.get('status', 0)
 
-        if task_id == CHECKIN_TASK_ID:
-            # status=2 表示可领取
+        if tid == task_id:
             if status == 2:
-                print(f"发现可领取任务: {task_name} (ID: {task_id})")
-                success, result = claim_task_reward(token, task_id)
+                print(f"发现可领取任务: {task_name} (ID: {tid})")
+                success, result = claim_task_reward(token, tid)
                 if success:
-                    print(f"  [OK] 积分领取成功！")
+                    print(f"  [OK] 领取成功！")
                     return True
                 else:
-                    print(f"  [FAIL] 积分领取失败: {result}")
+                    print(f"  [FAIL] 领取失败: {result}")
                     return False
             elif status == 3:
-                print(f"签到任务积分已领取: {task_name}")
+                print(f"任务已领取: {task_name}")
                 return True
             else:
-                print(f"签到任务未完成: {task_name} (status={status})")
+                print(f"任务未完成: {task_name} (status={status})")
                 return False
 
-    print(f"未找到签到任务 (ID={CHECKIN_TASK_ID})")
-    return False
-
-
-def claim_vip_reward(cookie_str):
-    """领取VIP福利的每日积分奖励"""
-    user_info = extract_user_info_from_cookies(cookie_str)
-    token = user_info.get('token') if isinstance(user_info, dict) else None
-
-    if not token:
-        print("无法获取 token，跳过VIP福利领取")
-        return False
-
-    # 获取任务列表，检查VIP福利任务状态
-    task_result = get_task_list(token)
-    if not task_result or task_result.get('errno') != 0:
-        print("获取任务列表失败")
-        return False
-
-    tasks = extract_tasks_from_response(task_result)
-    for task in tasks:
-        task_id = task.get('id') or task.get('taskId')
-        task_name = task.get('title') or task.get('name') or task.get('taskName', '未知')
-        status = task.get('status', 0)
-
-        if task_id == VIP_TASK_ID:
-            if status == 2:
-                print(f"发现可领取任务: {task_name} (ID: {task_id})")
-                success, result = claim_task_reward(token, task_id)
-                if success:
-                    print(f"  [OK] VIP福利领取成功！")
-                    return True
-                else:
-                    print(f"  [FAIL] VIP福利领取失败: {result}")
-                    return False
-            elif status == 3:
-                print(f"VIP福利已领取: {task_name}")
-                return True
-            elif status == 1:
-                print(f"VIP福利不可领取（非VIP或未满足条件）: {task_name}")
-                return False
-            else:
-                print(f"VIP福利状态未知: {task_name} (status={status})")
-                return False
-
-    print(f"未找到VIP福利任务 (ID={VIP_TASK_ID})，可能非VIP账号")
+    print(f"未找到任务 (ID={task_id})")
     return False
 
 
@@ -413,13 +366,11 @@ def main():
 
         success = checkin(cookie_str)
         if success:
-            # 签到成功后领取积分
             print("\n--- 领取签到积分 ---")
-            claim_checkin_reward(cookie_str)
+            claim_task_by_id(cookie_str, CHECKIN_TASK_ID)
 
-            # 领取VIP福利
             print("\n--- 领取VIP福利 ---")
-            claim_vip_reward(cookie_str)
+            claim_task_by_id(cookie_str, VIP_TASK_ID)
         else:
             all_success = False
 
